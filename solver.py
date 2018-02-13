@@ -3,6 +3,7 @@ import itertools
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+import torch.backends.cudnn as cudnn
 
 from dataset import *
 import misc
@@ -53,7 +54,7 @@ class Solver(object):
         self.resize_scale = config.resize_scale
         self.crop_size = config.crop_size
         self.flip = config.flip
-        self.model_dir = './' + self.dataset + '/model/'
+        self.model_dir = './' + self.dataset + '/models/'
 
     def build_model(self):
 
@@ -79,6 +80,7 @@ class Solver(object):
             self.G_B.cuda()
             self.D_A.cuda()
             self.D_B.cuda()
+            cudnn.benchmark = True
 
             self.MSE_loss.cuda()
             self.L1_loss.cuda()
@@ -86,6 +88,15 @@ class Solver(object):
     def build_dataloader(self):
         self.train_data_loader_A, self.train_data_loader_B = train_dataloader(input_size=self.input_size, batch_size=self.batch_size, dataset=self.dataset)
         self.test_data_loader_A, self.test_data_loader_B = test_dataloader(input_size=self.input_size, batch_size=self.batch_size, dataset=self.dataset)
+
+    @staticmethod
+    def save_image(filename, img):
+        img = img.cpu().data[0].numpy()
+        img *= 255.0
+        img = img.clip(0, 255)
+        img = img.transpose(1, 2, 0).astype("uint8")
+        img = Image.fromarray(img)
+        img.save(filename)
 
     def save(self):
         if not os.path.exists('./' + self.dataset):
@@ -162,8 +173,31 @@ class Solver(object):
             D_B_loss.backward()
             self.D_B_optimizer.step()
 
-            misc.progress_bar(i + 1, len(self.train_data_loader_A), 'D_A_loss: %.4f | D_B_loss: %.4f | G_A_loss: %.4f | G_B_loss: %.4f'
+            misc.progress_bar(i, len(self.train_data_loader_A), 'D_A_loss: %.4f | D_B_loss: %.4f | G_A_loss: %.4f | G_B_loss: %.4f'
                               % (D_A_loss.data[0], D_B_loss.data[0], G_A_loss.data[0], G_B_loss.data[0]))
+
+    def sample(self, model_path, pic_path, mode):
+        transform = transforms.Compose([transforms.Resize(self.input_size),
+                                        transforms.ToTensor(),
+                                        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+
+        if mode == 'A':
+            # setup model
+            self.build_model()
+            self.G_A.load_state_dict(torch.load(model_path))
+            self.G_A.eval()
+
+            out = self.G_A(Variable(transform(Image.open(pic_path)).unsqueeze(0).cuda(), volatile=True))
+
+        else:
+            # setup model
+            self.build_model()
+            self.G_B.load_state_dict(torch.load(model_path))
+            self.G_B.eval()
+
+            out = self.G_B(Variable(transform(Image.open(pic_path)).unsqueeze(0).cuda(), volatile=True))
+
+        self.save_image('out.jpg', out)
 
     def run(self):
         self.build_model()
