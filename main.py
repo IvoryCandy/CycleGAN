@@ -6,7 +6,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--mode', required=False, default='train', help='train or A or B')
 
 # train
-parser.add_argument('--batch_size', type=int, default=8, help='train batch size')
+parser.add_argument('--batch_size', type=int, default=1, help='train batch size')
 parser.add_argument('--dataset', required=False, default='horse2zebra', help='input dataset')
 
 # test

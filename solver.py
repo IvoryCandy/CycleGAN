@@ -2,7 +2,6 @@ import itertools
 
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import torch.backends.cudnn as cudnn
 
 from dataset import *
@@ -14,6 +13,7 @@ from model import Generator, Discriminator
 class Solver(object):
     def __init__(self, config):
         self.cuda = torch.cuda.is_available()
+        self.device = torch.device('cuda' if self.cuda else 'cpu')
 
         # model
         self.G_A = None
@@ -58,10 +58,10 @@ class Solver(object):
 
     def build_model(self):
 
-        self.G_A = Generator(3, self.g_conv_dim, 3, self.num_resnet)
-        self.G_B = Generator(3, self.g_conv_dim, 3, self.num_resnet)
-        self.D_A = Discriminator(3, self.d_conv_dim, 1)
-        self.D_B = Discriminator(3, self.d_conv_dim, 1)
+        self.G_A = Generator(3, self.g_conv_dim, 3, self.num_resnet).to(self.device)
+        self.G_B = Generator(3, self.g_conv_dim, 3, self.num_resnet).to(self.device)
+        self.D_A = Discriminator(3, self.d_conv_dim, 1).to(self.device)
+        self.D_B = Discriminator(3, self.d_conv_dim, 1).to(self.device)
 
         self.G_A.normal_weight_init(mean=0.0, std=0.02)
         self.G_B.normal_weight_init(mean=0.0, std=0.02)
@@ -76,12 +76,7 @@ class Solver(object):
         self.D_B_optimizer = torch.optim.Adam(self.D_B.parameters(), lr=self.lrD, betas=(self.beta1, self.beta2))
 
         if self.cuda:
-            self.G_A.cuda()
-            self.G_B.cuda()
-            self.D_A.cuda()
-            self.D_B.cuda()
             cudnn.benchmark = True
-
             self.MSE_loss.cuda()
             self.L1_loss.cuda()
 
@@ -91,7 +86,7 @@ class Solver(object):
 
     @staticmethod
     def save_image(filename, img):
-        img = img.cpu().data[0].numpy()
+        img = img.cpu().item().numpy()
         img *= 255.0
         img = img.clip(0, 255)
         img = img.transpose(1, 2, 0).astype("uint8")
@@ -119,14 +114,14 @@ class Solver(object):
             self.G_B.train()
 
             # input image data
-            real_A = Variable(real_A.cuda() if self.cuda else real_A)
-            real_B = Variable(real_B.cuda()if self.cuda else real_B)
+            real_A = real_A.to(self.device)
+            real_B = real_A.to(self.device)
 
             # Train generator G
             # A -> B
             fake_B = self.G_A(real_A)
             D_B_fake_decision = self.D_B(fake_B)
-            G_A_loss = self.MSE_loss(D_B_fake_decision, Variable(torch.ones(D_B_fake_decision.size()).cuda()))
+            G_A_loss = self.MSE_loss(D_B_fake_decision, torch.ones(D_B_fake_decision.size(), device=self.device))
 
             # forward cycle loss
             recon_A = self.G_B(fake_B)
@@ -135,7 +130,7 @@ class Solver(object):
             # B -> A
             fake_A = self.G_B(real_B)
             D_A_fake_decision = self.D_A(fake_A)
-            G_B_loss = self.MSE_loss(D_A_fake_decision, Variable(torch.ones(D_A_fake_decision.size()).cuda()))
+            G_B_loss = self.MSE_loss(D_A_fake_decision, torch.ones(D_A_fake_decision.size(), device=self.device))
 
             # backward cycle loss
             recon_B = self.G_A(fake_A)
@@ -149,10 +144,10 @@ class Solver(object):
 
             # Train discriminator D_A
             D_A_real_decision = self.D_A(real_A)
-            D_A_real_loss = self.MSE_loss(D_A_real_decision, Variable(torch.ones(D_A_real_decision.size()).cuda()))
+            D_A_real_loss = self.MSE_loss(D_A_real_decision, torch.ones(D_A_real_decision.size(), device=self.device))
             fake_A = fake_A_pool.query(fake_A)
             D_A_fake_decision = self.D_A(fake_A)
-            D_A_fake_loss = self.MSE_loss(D_A_fake_decision, Variable(torch.zeros(D_A_fake_decision.size()).cuda()))
+            D_A_fake_loss = self.MSE_loss(D_A_fake_decision, torch.zeros(D_A_fake_decision.size(), device=self.device))
 
             # Back propagation
             D_A_loss = (D_A_real_loss + D_A_fake_loss) * 0.5
@@ -162,10 +157,10 @@ class Solver(object):
 
             # Train discriminator D_B
             D_B_real_decision = self.D_B(real_B)
-            D_B_real_loss = self.MSE_loss(D_B_real_decision, Variable(torch.ones(D_B_real_decision.size()).cuda()))
+            D_B_real_loss = self.MSE_loss(D_B_real_decision, torch.ones(D_B_real_decision.size(), device=self.device))
             fake_B = fake_B_pool.query(fake_B)
             D_B_fake_decision = self.D_B(fake_B)
-            D_B_fake_loss = self.MSE_loss(D_B_fake_decision, Variable(torch.zeros(D_B_fake_decision.size()).cuda()))
+            D_B_fake_loss = self.MSE_loss(D_B_fake_decision, torch.zeros(D_B_fake_decision.size(), device=self.device))
 
             # Back propagation
             D_B_loss = (D_B_real_loss + D_B_fake_loss) * 0.5
@@ -173,29 +168,31 @@ class Solver(object):
             D_B_loss.backward()
             self.D_B_optimizer.step()
 
-            misc.progress_bar(i, len(self.train_data_loader_A), 'D_A_loss: %.4f | D_B_loss: %.4f | G_A_loss: %.4f | G_B_loss: %.4f'
-                              % (D_A_loss.data[0], D_B_loss.data[0], G_A_loss.data[0], G_B_loss.data[0]))
+            misc.progress_bar(i, len(self.train_data_loader_A),
+                              'D_A_loss: %.4f | D_B_loss: %.4f | G_A_loss: %.4f | G_B_loss: %.4f'
+                              % (D_A_loss.item(), D_B_loss.item(), G_A_loss.item(), G_B_loss.item()))
 
     def sample(self, model_path, pic_path, mode):
         transform = transforms.Compose([transforms.Resize(self.input_size),
                                         transforms.ToTensor(),
                                         transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
 
-        if mode == 'A':
-            # setup model
-            self.build_model()
-            self.G_A.load_state_dict(torch.load(model_path))
-            self.G_A.eval()
+        with torch.no_grad():
+            if mode == 'A':
+                # setup model
+                self.build_model()
+                self.G_A.load_state_dict(torch.load(model_path))
+                self.G_A.eval()
 
-            out = self.G_A(Variable(transform(Image.open(pic_path)).unsqueeze(0).cuda(), volatile=True))
+                out = self.G_A(transform(Image.open(pic_path)).unsqueeze(0).to(self.device))
 
-        else:
-            # setup model
-            self.build_model()
-            self.G_B.load_state_dict(torch.load(model_path))
-            self.G_B.eval()
+            else:
+                # setup model
+                self.build_model()
+                self.G_B.load_state_dict(torch.load(model_path))
+                self.G_B.eval()
 
-            out = self.G_B(Variable(transform(Image.open(pic_path)).unsqueeze(0).cuda(), volatile=True))
+                out = self.G_B(transform(Image.open(pic_path)).unsqueeze(0).to(self.device))
 
         self.save_image('out.jpg', out)
 
